@@ -44,7 +44,7 @@ jobs:
     - name: Compile Node.js for x86_64
       working-directory: ./openwrt
       run: |
-        make package/node/compile V=s -j$(nproc)
+        make package/feeds/node/node/compile V=s -j$(nproc)
 
     - name: Upload Node.js APK
       uses: actions/upload-artifact@v4
