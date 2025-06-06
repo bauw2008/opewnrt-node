@@ -25,21 +25,28 @@ jobs:
       working-directory: ./openwrt
       run: |
         ./scripts/feeds update -a
-        # 删除默认packages中的node包
+        # 删除默认 packages 中的 node 包，避免冲突
         rm -rf package/feeds/packages/node*
         ./scripts/feeds install -a -p node
 
-    - name: Debug package path
+    - name: Debug package paths
       working-directory: ./openwrt
       run: |
         echo "Listing package directory..."
-        ls -l package
-        echo "Listing feeds directory..."
-        ls -l package/feeds
-        echo "Listing node feed directory..."
-        ls -l package/feeds/node
-        echo "Listing node packages (if exist)..."
-        ls -l package/feeds/node/node || echo "No node directory"
+        ls -l package || echo "package directory not found"
+
+        echo "Listing package/feeds directory..."
+        ls -l package/feeds || echo "package/feeds directory not found"
+
+        echo "Listing package/feeds/node directory..."
+        ls -l package/feeds/node || echo "package/feeds/node directory not found"
+
+        echo "Checking for node package directory under package/feeds/node..."
+        if [ -d package/feeds/node/node ]; then
+          ls -l package/feeds/node/node
+        else
+          echo "No node directory under package/feeds/node"
+        fi
 
     - name: Configure x86_64 build
       working-directory: ./openwrt
@@ -57,7 +64,8 @@ jobs:
     - name: Compile Node.js for x86_64
       working-directory: ./openwrt
       run: |
-        # 这里改成你 Debug 发现的正确路径，比如 package/node/compile
+        # 根据 Debug package paths 的结果替换下面路径
+        # 例如：make package/node/compile 或 make package/feeds/node/<实际包名>/compile
         make package/node/compile V=s -j$(nproc)
 
     - name: Upload Node.js APK
