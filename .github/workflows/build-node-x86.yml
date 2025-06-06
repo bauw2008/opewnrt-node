@@ -28,6 +28,14 @@ jobs:
         rm -rf package/feeds/packages/node*
         ./scripts/feeds install -a -p node
 
+    - name: Debug package path
+      working-directory: ./openwrt
+      run: |
+      echo "Listing node feed directory..."
+      ls -l package/feeds/node
+      echo "Listing node package directory (if exists)..."
+      ls -l package/feeds/node/node || echo "No node directory"
+
     - name: Configure x86_64 build
       working-directory: ./openwrt
       run: |
