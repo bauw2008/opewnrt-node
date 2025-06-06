@@ -1,0 +1,50 @@
+name: Build Node.js APK (x86_64)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout workflow repo
+      uses: actions/checkout@v3
+
+    - name: Clone OpenWrt master
+      run: |
+        git clone --depth 1 https://github.com/openwrt/openwrt.git
+        cp feeds.conf.default openwrt/feeds.conf.default
+
+    - name: Install build dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y build-essential clang flex bison g++ gawk gcc-multilib gperf unzip \
+          libncurses5-dev zlib1g-dev libssl-dev python3-distutils rsync subversion git wget file
+
+    - name: Update and install feeds
+      working-directory: ./openwrt
+      run: |
+        ./scripts/feeds update -a
+        rm -rf ./package/feeds/packages/node*
+        ./scripts/feeds install -a -p node
+
+    - name: Configure x86_64 build
+      working-directory: ./openwrt
+      run: |
+        echo "CONFIG_TARGET_x86=y" >> .config
+        echo "CONFIG_TARGET_x86_64=y" >> .config
+        echo "CONFIG_TARGET_x86_64_Generic=y" >> .config
+        echo "CONFIG_PACKAGE_node=y" >> .config
+        make defconfig
+
+    - name: Compile Node.js for x86_64
+      working-directory: ./openwrt
+      run: |
+        make package/node/compile V=s -j$(nproc)
+
+    - name: Upload Node.js APK
+      uses: actions/upload-artifact@v3
+      with:
+        name: node-apk-x86_64
+        path: openwrt/bin/packages/*/node_*.apk
