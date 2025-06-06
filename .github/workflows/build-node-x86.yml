@@ -1,4 +1,4 @@
-name: Build Node.js APK (x86_64)
+name: Build Node.js IPK (x86_64)
 
 on:
   workflow_dispatch:
@@ -14,7 +14,6 @@ jobs:
     - name: Clone OpenWrt master
       run: |
         git clone --depth 1 https://github.com/openwrt/openwrt.git
-        cp feeds.conf.default openwrt/feeds.conf.default
 
     - name: Install build dependencies
       run: |
@@ -26,16 +25,20 @@ jobs:
       working-directory: ./openwrt
       run: |
         ./scripts/feeds update -a
-        rm -rf ./package/feeds/packages/node*
+        rm -rf package/feeds/packages/node*
         ./scripts/feeds install -a -p node
 
     - name: Configure x86_64 build
       working-directory: ./openwrt
       run: |
+        make defconfig
         echo "CONFIG_TARGET_x86=y" >> .config
         echo "CONFIG_TARGET_x86_64=y" >> .config
         echo "CONFIG_TARGET_x86_64_Generic=y" >> .config
         echo "CONFIG_PACKAGE_node=y" >> .config
+        echo "CONFIG_NODEJS_20=y" >> .config
+        echo "# CONFIG_NODEJS_22 is not set" >> .config
+        echo "# CONFIG_NODEJS_24 is not set" >> .config
         make defconfig
 
     - name: Compile Node.js for x86_64
@@ -43,8 +46,8 @@ jobs:
       run: |
         make package/node/compile V=s -j$(nproc)
 
-    - name: Upload Node.js APK
-      uses: actions/upload-artifact@v3
+    - name: Upload Node.js IPK
+      uses: actions/upload-artifact@v4
       with:
-        name: node-apk-x86_64
-        path: openwrt/bin/packages/*/node_*.apk
+        name: node-ipk-x86_64
+        path: openwrt/bin/packages/*/node_*.ipk
