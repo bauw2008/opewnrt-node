@@ -19,7 +19,7 @@ jobs:
       run: |
         sudo apt update
         sudo apt install -y build-essential clang flex bison g++ gawk gcc-multilib gperf unzip \
-        libncurses5-dev zlib1g-dev libssl-dev python3 python3-apt python3.10-distutils rsync subversion git wget file
+        libncurses5-dev zlib1g-dev libssl-dev python3 python3-apt python3-distutils-extra rsync subversion git wget file
 
     - name: Update and install feeds
       working-directory: ./openwrt
