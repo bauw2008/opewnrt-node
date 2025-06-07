@@ -56,16 +56,15 @@ jobs:
           libncurses5-dev zlib1g-dev libssl-dev python3 python3-apt python3-distutils-extra rsync \
           subversion git wget file python3-pip
         pip3 install --user meson ninja
-      
-      - name: Build scripts/config/conf tool (single-threaded)
-       working-directory: ./openwrt
-       run: make -j1 scripts/config/conf V=s
+
+    - name: Build scripts/config/conf tool (single-threaded)
+      working-directory: ./openwrt
+      run: make -j1 scripts/config/conf V=s
 
     - name: Configure build for selected node version and arch (single-threaded defconfig)
       working-directory: ./openwrt
       run: |
         rm -f .config
-        make -j1 defconfig
 
         case "$TARGET_ARCH" in
           x86_64)
@@ -93,7 +92,6 @@ jobs:
         echo "CONFIG_PACKAGE_node=y" >> .config
         echo "CONFIG_PACKAGE_apk-mbedtls=y" >> .config
 
-        # 运行单线程 defconfig 以避免并发错误
         make -j1 defconfig
 
     - name: Build toolchain and dependencies (multi-threaded)
@@ -104,8 +102,7 @@ jobs:
 
     - name: Compile Node.js package (multi-threaded)
       working-directory: ./openwrt
-      run: |
-        make package/feeds/node/node/compile -j$(nproc) V=s
+      run: make package/feeds/node/node/compile -j$(nproc) V=s
 
     - name: Copy APK and Key Files
       run: |
