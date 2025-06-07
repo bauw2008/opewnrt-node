@@ -67,37 +67,22 @@ jobs:
         
         # 修复Makefile
         sed -i 's/CFLAGS= -O2 $(call cc-option,-fno-PIE) $(call cc-option,-fno-stack-protector)/CFLAGS= -O2/' scripts/config/Makefile
-        
-        # 设置正确的目标架构选项
-        case "$TARGET_ARCH" in
-          x86_64)
-            export TARGET_OPTIONS="x86_64"
-            ;;
-          aarch64)
-            export TARGET_OPTIONS="aarch64"
-            ;;
-        esac
 
     - name: Configure build
       working-directory: ./openwrt
       run: |
         rm -f .config
         
-        # 使用正确的目标配置
+        # 设置目标配置 (修复语法错误)
         case "$TARGET_ARCH" in
           x86_64)
-            cat <<EOF >> .config
-CONFIG_TARGET_x86=y
-CONFIG_TARGET_x86_64=y
-CONFIG_TARGET_x86_64_DEVICE_generic=y
-EOF
+            echo "CONFIG_TARGET_x86=y" >> .config
+            echo "CONFIG_TARGET_x86_64=y" >> .config
+            echo "CONFIG_TARGET_x86_64_DEVICE_generic=y" >> .config
             ;;
           aarch64)
-            cat <<EOF >> .config
-CONFIG_TARGET_armvirt=y
-CONFIG_TARGET_armvirt_64=y
-CONFIG_TARGET_armvirt_64_Default=y
-EOF
+            echo "CONFIG_TARGET_armvirt=y" >> .config
+            echo "CONFIG_TARGET_armvirt_64=y" >> .config
             ;;
         esac
 
@@ -129,14 +114,11 @@ EOF
       working-directory: ./openwrt
       run: |
         # 关键修复：在构建Node前设置ARCH变量
-        case "$TARGET_ARCH" in
-          x86_64)
-            export ARCH=x86_64
-            ;;
-          aarch64)
-            export ARCH=aarch64
-            ;;
-        esac
+        if [ "$TARGET_ARCH" = "x86_64" ]; then
+          export ARCH=x86_64
+        elif [ "$TARGET_ARCH" = "aarch64" ]; then
+          export ARCH=aarch64
+        fi
         
         # 单线程构建Node.js避免并发问题
         make package/feeds/node/node/compile -j1 V=s
@@ -149,21 +131,21 @@ EOF
         find openwrt/bin -name "node*.apk" -exec cp {} output/apk/ \;
         
         # 查找密钥 - 根据OpenWrt版本可能有不同位置
-        KEY_DIRS=(
-          "openwrt/staging_dir/target-*/etc/apk/keys"
-          "openwrt/staging_dir/target-*/root-*/etc/apk/keys"
-        )
-        
-        for dir in "${KEY_DIRS[@]}"; do
-          if [ -d "$dir" ]; then
-            cp -r "$dir"/* output/keys/
-            break
-          fi
-        done
+        if [ -d "openwrt/staging_dir/target-${TARGET_ARCH}_musl/etc/apk/keys" ]; then
+          cp -r "openwrt/staging_dir/target-${TARGET_ARCH}_musl/etc/apk/keys"/* output/keys/
+        elif [ -d "openwrt/staging_dir/target-${TARGET_ARCH}_musl/root-${TARGET_ARCH}/etc/apk/keys" ]; then
+          cp -r "openwrt/staging_dir/target-${TARGET_ARCH}_musl/root-${TARGET_ARCH}/etc/apk/keys"/* output/keys/
+        else
+          echo "WARNING: No keys directory found"
+        fi
 
         cd output
         tar -czvf node-apk-${TARGET_ARCH}.tar.gz apk
-        [ -d keys ] && tar -czvf node-apk-keys.tar.gz keys || echo "No keys found"
+        if [ -d "keys" ]; then
+          tar -czvf node-apk-keys.tar.gz keys
+        else
+          echo "No keys found, skipping key archive"
+        fi
 
     - name: Setup GitHub CLI
       run: sudo apt install -y gh
@@ -185,5 +167,10 @@ EOF
       run: |
         gh release upload "$RELEASE_TAG" \
           output/node-apk-${TARGET_ARCH}.tar.gz \
-          $( [ -f output/node-apk-keys.tar.gz ] && echo "output/node-apk-keys.tar.gz" ) \
           --clobber
+        
+        if [ -f "output/node-apk-keys.tar.gz" ]; then
+          gh release upload "$RELEASE_TAG" \
+            output/node-apk-keys.tar.gz \
+            --clobber
+        fi
