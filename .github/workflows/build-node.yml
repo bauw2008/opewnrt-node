@@ -1,4 +1,4 @@
-name: Build Node.js APK
+name: Build Node.js APK (x86_64)
 
 on:
   workflow_dispatch:
@@ -14,7 +14,6 @@ jobs:
     - name: Clone OpenWrt master
       run: |
         git clone --depth 1 https://github.com/openwrt/openwrt.git
-
     - name: Add custom node feed & update feeds
       working-directory: ./openwrt
       run: |
@@ -23,7 +22,6 @@ jobs:
         rm -rf feeds/packages/lang/node*
         rm -rf package/feeds/packages/node*
         ./scripts/feeds install -a -p node
-
     - name: Install build dependencies
       run: |
         sudo apt update
@@ -31,7 +29,6 @@ jobs:
           libncurses5-dev zlib1g-dev libssl-dev python3 python3-apt python3-distutils-extra rsync \
           subversion git wget file python3-pip
         pip3 install --user meson ninja
-
     - name: Configure x86_64 build
       working-directory: ./openwrt
       run: |
@@ -44,54 +41,22 @@ jobs:
         echo "# CONFIG_NODEJS_22 is not set" >> .config
         echo "# CONFIG_NODEJS_24 is not set" >> .config
         make defconfig
-
     - name: Build toolchain and dependencies
       working-directory: ./openwrt
       run: |
         make tools/install -j$(nproc) V=s
         make toolchain/install -j$(nproc) V=s
-
     - name: Compile Node.js for x86_64
       working-directory: ./openwrt
       run: |
         make package/feeds/node/node/compile V=s -j$(nproc)
-
-    - name: Find built APK path
-      id: find_apk
+    - name: List compiled APKs
       working-directory: ./openwrt
       run: |
-        APK_PATH=$(find ./bin/packages/ -name "node*.apk" | head -n 1)
-        if [ -z "$APK_PATH" ]; then
-          echo "No APK found!"
-          exit 1
-        fi
-        echo "apk_path=$APK_PATH" >> $GITHUB_OUTPUT
-        echo "Found APK: $APK_PATH"
-
-    - name: Rename APK with architecture prefix
-      id: rename_apk
-      run: |
-        original="${{ steps.find_apk.outputs.apk_path }}"
-        base=$(basename "$original")
-        arch="x86"
-        newname=$(echo "$base" | sed "s/^node/node-${arch}/")
-        cp "$original" "./$newname"
-        echo "renamed_path=./$newname" >> $GITHUB_OUTPUT
-        echo "renamed_filename=$newname" >> $GITHUB_OUTPUT
-
-    - name: Create GitHub Release
-      id: create_release
-      uses: actions/create-release@v1
+        echo "Searching for built .apk files:"
+        find bin/packages/ -name "node*.apk" || echo "No APKs found"
+    - name: Upload Node.js APK
+      uses: actions/upload-artifact@v4
       with:
-        tag_name: "nodejs-${{ github.run_id }}"
-        release_name: "Node.js Build #${{ github.run_id }}"
-        draft: false
-        prerelease: false
-
-    - name: Upload Node.js APK to Release Assets
-      uses: actions/upload-release-asset@v1
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ${{ steps.rename_apk.outputs.renamed_path }}
-        asset_name: ${{ steps.rename_apk.outputs.renamed_filename }}
-        asset_content_type: application/octet-stream
+        name: node-apk-x86_64
+        path: openwrt/bin/packages/*/node/*.apk
