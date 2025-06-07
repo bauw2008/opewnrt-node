@@ -56,10 +56,10 @@ jobs:
           libncurses5-dev zlib1g-dev libssl-dev python3 python3-apt python3-distutils-extra rsync \
           subversion git wget file python3-pip
         pip3 install --user meson ninja
-
-    - name: Build scripts/config/conf tool (single-threaded)
-    working-directory: ./openwrt
-    run: make -j1 scripts/config/conf V=s
+      
+      - name: Build scripts/config/conf tool (single-threaded)
+       working-directory: ./openwrt
+       run: make -j1 scripts/config/conf V=s
 
     - name: Configure build for selected node version and arch (single-threaded defconfig)
       working-directory: ./openwrt
