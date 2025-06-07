@@ -15,36 +15,27 @@ jobs:
       run: |
         git clone --depth 1 https://github.com/openwrt/openwrt.git
 
-    - name: Add custom node feed
+    - name: Add custom node feed & update feeds
       working-directory: ./openwrt
       run: |
         echo "src-git node https://github.com/nxhack/openwrt-node-packages.git" >> feeds.conf.default
+        ./scripts/feeds update -a
+        rm -rf feeds/packages/lang/node*
+        rm -rf package/feeds/packages/node*
+        ./scripts/feeds install -a -p node
 
     - name: Install build dependencies
       run: |
         sudo apt update
         sudo apt install -y build-essential clang flex bison g++ gawk gcc-multilib gperf unzip \
-          libncurses5-dev zlib1g-dev libssl-dev python3 python3-apt python3-distutils-extra rsync subversion git wget file
-
-    - name: Update and install feeds
-      working-directory: ./openwrt
-      run: |
-        ./scripts/feeds update -a
-        rm -rf package/feeds/packages/node*
-        ./scripts/feeds install -a -p node
-
-    - name: Debug package path
-      working-directory: ./openwrt
-      run: |
-        echo "Listing package/feeds/node directory..."
-        ls -l package/feeds/node || echo "node feed not found"
-        echo "Listing node directory..."
-        ls -l package/feeds/node/node || echo "node package not found"
+          libncurses5-dev zlib1g-dev libssl-dev python3 python3-apt python3-distutils-extra rsync \
+          subversion git wget file python3-pip
+        pip3 install --user meson ninja
 
     - name: Configure x86_64 build
       working-directory: ./openwrt
       run: |
-        make defconfig
+        rm -f .config
         echo "CONFIG_TARGET_x86=y" >> .config
         echo "CONFIG_TARGET_x86_64=y" >> .config
         echo "CONFIG_TARGET_x86_64_Generic=y" >> .config
@@ -54,13 +45,25 @@ jobs:
         echo "# CONFIG_NODEJS_24 is not set" >> .config
         make defconfig
 
+    - name: Build toolchain and dependencies
+      working-directory: ./openwrt
+      run: |
+        make tools/install -j$(nproc) V=s
+        make toolchain/install -j$(nproc) V=s
+
     - name: Compile Node.js for x86_64
       working-directory: ./openwrt
       run: |
         make package/feeds/node/node/compile V=s -j$(nproc)
 
+    - name: List compiled APKs
+      working-directory: ./openwrt
+      run: |
+        echo "Searching for built .apk files:"
+        find bin/packages/ -name "node*.apk" || echo "No APKs found"
+
     - name: Upload Node.js APK
       uses: actions/upload-artifact@v4
       with:
         name: node-apk-x86_64
-        path: openwrt/bin/packages/*/node_*.apk
+        path: openwrt/bin/packages/*/node/*.apk
