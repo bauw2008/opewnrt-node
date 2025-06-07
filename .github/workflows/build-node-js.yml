@@ -59,7 +59,9 @@ jobs:
 
     - name: Build scripts/config/conf tool (single-threaded)
       working-directory: ./openwrt
-      run: make -j1 scripts/config/conf V=s
+      run: |
+        # Fix the Makefile issue before building
+        sed -i 's/CFLAGS= -O2 $(call cc-option,-fno-PIE) $(call cc-option,-fno-stack-protector)/CFLAGS= -O2/' scripts/config/Makefile
 
     - name: Configure build for selected node version and arch (single-threaded defconfig)
       working-directory: ./openwrt
@@ -91,8 +93,6 @@ jobs:
         # 强制启用 node 包和 apk-mbedtls 依赖
         echo "CONFIG_PACKAGE_node=y" >> .config
         echo "CONFIG_PACKAGE_apk-mbedtls=y" >> .config
-
-        make -j1 defconfig
 
     - name: Build toolchain and dependencies (multi-threaded)
       working-directory: ./openwrt
