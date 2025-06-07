@@ -39,7 +39,7 @@ jobs:
     - name: Clone OpenWrt master
       run: git clone --depth 1 https://github.com/openwrt/openwrt.git
 
-    - name: Setup ccache (speed up rebuilds)
+    - name: Setup ccache
       run: |
         sudo apt update
         sudo apt install -y ccache
@@ -53,17 +53,19 @@ jobs:
           subversion git wget file python3-pip
         pip3 install --user meson ninja
 
-    - name: Prepare OpenWrt feeds and configs
+    - name: Setup feeds and create .config
       working-directory: ./openwrt
       run: |
         echo "src-git node https://github.com/nxhack/openwrt-node-packages.git" >> feeds.conf.default
         ./scripts/feeds update -a
         ./scripts/feeds install -a -p node
 
-        # 创建最小化的 .config
+        # 创建 minimal .config
         cat <<EOF > .config
-        CONFIG_TARGET_${TARGET_ARCH%=*}=y
+        CONFIG_TARGET_${TARGET_ARCH}=y
         CONFIG_TARGET_${TARGET_ARCH}_Generic=y
+        CONFIG_PACKAGE_node=y
+        CONFIG_PACKAGE_apk-mbedtls=y
         EOF
 
         case "$NODE_VERSION" in
@@ -72,9 +74,6 @@ jobs:
           24) echo "CONFIG_NODEJS_24=y" >> .config ;;
         esac
 
-        echo "CONFIG_PACKAGE_node=y" >> .config
-        echo "CONFIG_PACKAGE_apk-mbedtls=y" >> .config
-
     - name: Build toolchain and dependencies
       working-directory: ./openwrt
       run: |
@@ -82,7 +81,7 @@ jobs:
         make tools/install -j$(nproc) V=s
         make toolchain/install -j$(nproc) V=s
 
-    - name: Build Node.js package
+    - name: Compile Node.js package
       working-directory: ./openwrt
       run: |
         make package/feeds/node/node/compile -j$(nproc) V=s
