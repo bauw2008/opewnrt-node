@@ -1,4 +1,4 @@
-name: Build Node.js APK (x86_64)
+name: Build Node.js APK
 
 on:
   workflow_dispatch:
