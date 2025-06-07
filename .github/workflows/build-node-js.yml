@@ -16,10 +16,8 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      # 这里用输入参数设置环境变量
       NODE_VERSION: ${{ github.event.inputs.node_version }}
       TARGET_ARCH: ${{ github.event.inputs.target_arch }}
-      # 生成 Release tag，例如 node-v22-x86_64
       RELEASE_TAG: node-v${{ github.event.inputs.node_version }}-${{ github.event.inputs.target_arch }}
 
     steps:
@@ -63,7 +61,8 @@ jobs:
       working-directory: ./openwrt
       run: |
         rm -f .config
-        # 选择目标平台
+
+        # 目标平台配置
         case "$TARGET_ARCH" in
           x86_64)
             echo "CONFIG_TARGET_x86=y" >> .config
@@ -76,19 +75,22 @@ jobs:
             ;;
         esac
 
-        # 配置 Node.js 版本选项，默认关闭所有，开启选中的
+        # 关闭所有 Node.js 版本选项
         echo "# CONFIG_NODEJS_20 is not set" >> .config
         echo "# CONFIG_NODEJS_22 is not set" >> .config
         echo "# CONFIG_NODEJS_24 is not set" >> .config
 
+        # 选择 Node.js 版本
         case "$NODE_VERSION" in
           20) echo "CONFIG_NODEJS_20=y" >> .config ;;
           22) echo "CONFIG_NODEJS_22=y" >> .config ;;
           24) echo "CONFIG_NODEJS_24=y" >> .config ;;
         esac
 
-        # 必选开启 Node 包
+        # 必选开启 Node.js 包和 apk-mbedtls 依赖，确保编译环境支持
         echo "CONFIG_PACKAGE_node=y" >> .config
+        echo "CONFIG_PACKAGE_apk-mbedtls=y" >> .config
+
         make defconfig
 
     - name: Build toolchain and dependencies
@@ -102,22 +104,18 @@ jobs:
       run: |
         make package/feeds/node/node/compile -j$(nproc) V=s
 
-    - name: Copy APK and Key Files (with mbedtls & keys check)
+    - name: Copy APK and Key Files
       run: |
         mkdir -p output/apk output/keys
-        # 拷贝 apk 文件
+
+        # 拷贝编译好的 Node.js APK 包
         cp openwrt/bin/packages/${TARGET_ARCH}/node/node*.apk output/apk/
-        # 确认 apk-mbedtls 依赖存在，或者略过
-        if grep -q "apk-mbedtls" openwrt/bin/packages/${TARGET_ARCH}/node/node*.apk; then
-          echo "apk-mbedtls dependency detected"
-        else
-          echo "apk-mbedtls dependency NOT detected, beware"
-        fi
-        # 复制 /etc/apk/keys，如果不存在则忽略
+
+        # 如果存在 apk keys 目录则复制，否则跳过
         if [ -d openwrt/staging_dir/target-${TARGET_ARCH}_musl/root-${TARGET_ARCH}/etc/apk/keys ]; then
           cp -r openwrt/staging_dir/target-${TARGET_ARCH}_musl/root-${TARGET_ARCH}/etc/apk/keys/* output/keys/
         else
-          echo "No apk keys found, skipping key export"
+          echo "No apk keys found, skipping keys export"
         fi
 
         cd output
@@ -129,7 +127,7 @@ jobs:
 
     - name: Authenticate GitHub CLI
       env:
-        GH_TOKEN: ${{ secrets.GH_PAT }}
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: echo "$GH_TOKEN" | gh auth login --with-token
 
     - name: Create GitHub Release (if not exists)
