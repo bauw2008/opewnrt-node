@@ -27,12 +27,12 @@ jobs:
     - name: Validate inputs
       run: |
         case "$NODE_VERSION" in
-          20|22|24) echo "Node.js version OK: $NODE_VERSION";;
+          20|22|24) echo "✅ Node.js version OK: $NODE_VERSION";;
           *) echo "❌ Invalid Node.js version: $NODE_VERSION. Must be 20, 22, or 24."; exit 1;;
         esac
 
         case "$TARGET_ARCH" in
-          x86_64|aarch64) echo "Target arch OK: $TARGET_ARCH";;
+          x86_64|aarch64) echo "✅ Target arch OK: $TARGET_ARCH";;
           *) echo "❌ Invalid target arch: $TARGET_ARCH. Must be x86_64 or aarch64."; exit 1;;
         esac
 
@@ -49,6 +49,14 @@ jobs:
         rm -rf package/feeds/packages/node*
         ./scripts/feeds install -a -p node
 
+    - name: Install missing dependencies (optional)
+      working-directory: ./openwrt
+      run: |
+        # 安装缺失的依赖，若不存在则跳过
+        ./scripts/feeds install libev || echo "⚠️ libev not found, skipping"
+        ./scripts/feeds install libtirpc || echo "⚠️ libtirpc not found, skipping"
+        ./scripts/feeds install libnetsnmp || echo "⚠️ libnetsnmp not found, skipping"
+
     - name: Install build dependencies
       run: |
         sudo apt update
@@ -60,10 +68,10 @@ jobs:
     - name: Build scripts/config/conf tool (single-threaded)
       working-directory: ./openwrt
       run: |
-        # Fix the Makefile issue before building
+        # 修复 Makefile 中 CFLAGS
         sed -i 's/CFLAGS= -O2 $(call cc-option,-fno-PIE) $(call cc-option,-fno-stack-protector)/CFLAGS= -O2/' scripts/config/Makefile
 
-    - name: Configure build for selected node version and arch (single-threaded defconfig)
+    - name: Configure build for selected node version and arch
       working-directory: ./openwrt
       run: |
         rm -f .config
@@ -90,7 +98,6 @@ jobs:
           24) echo "CONFIG_NODEJS_24=y" >> .config ;;
         esac
 
-        # 强制启用 node 包和 apk-mbedtls 依赖
         echo "CONFIG_PACKAGE_node=y" >> .config
         echo "CONFIG_PACKAGE_apk-mbedtls=y" >> .config
 
@@ -112,12 +119,12 @@ jobs:
         if [ -d openwrt/staging_dir/target-${TARGET_ARCH}_musl/root-${TARGET_ARCH}/etc/apk/keys ]; then
           cp -r openwrt/staging_dir/target-${TARGET_ARCH}_musl/root-${TARGET_ARCH}/etc/apk/keys/* output/keys/
         else
-          echo "No apk keys found, skipping key export"
+          echo "⚠️ No apk keys found, skipping key export"
         fi
 
         cd output
         tar -czvf node-apk-${TARGET_ARCH}.tar.gz apk
-        tar -czvf node-apk-keys.tar.gz keys || echo "No keys archive created"
+        tar -czvf node-apk-keys.tar.gz keys || echo "⚠️ No keys archive created"
 
     - name: Install GitHub CLI
       run: sudo apt install -y gh
@@ -134,4 +141,4 @@ jobs:
     - name: Upload APK and Keys to Release
       run: |
         gh release upload $RELEASE_TAG output/node-apk-${TARGET_ARCH}.tar.gz --clobber
-        gh release upload $RELEASE_TAG output/node-apk-keys.tar.gz --clobber || echo "No keys upload"
+        gh release upload $RELEASE_TAG output/node-apk-keys.tar.gz --clobber || echo "⚠️ No keys upload"
