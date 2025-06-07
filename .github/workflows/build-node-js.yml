@@ -57,10 +57,15 @@ jobs:
           subversion git wget file python3-pip
         pip3 install --user meson ninja
 
+    - name: Build scripts/config/conf tool (single-threaded)
+    working-directory: ./openwrt
+    run: make -j1 scripts/config/conf V=s
+
     - name: Configure build for selected node version and arch (single-threaded defconfig)
       working-directory: ./openwrt
       run: |
         rm -f .config
+        make -j1 defconfig
 
         case "$TARGET_ARCH" in
           x86_64)
