@@ -1,14 +1,14 @@
-name: Build Node.js APKs and Upload to Release
+name: Build Node.js APK and Upload to Release
 
 on:
   workflow_dispatch:
     inputs:
       node_version:
-        description: "Node.js version"
+        description: "Node.js version (choose: 20, 22, 24)"
         required: true
-        default: "20"
+        default: "22"
       target_arch:
-        description: "Target architecture"
+        description: "Target architecture (choose: x86_64, aarch64)"
         required: true
         default: "x86_64"
 
@@ -16,16 +16,31 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
+      # 这里用输入参数设置环境变量
       NODE_VERSION: ${{ github.event.inputs.node_version }}
       TARGET_ARCH: ${{ github.event.inputs.target_arch }}
+      # 生成 Release tag，例如 node-v22-x86_64
       RELEASE_TAG: node-v${{ github.event.inputs.node_version }}-${{ github.event.inputs.target_arch }}
 
     steps:
     - name: Checkout workflow repo
       uses: actions/checkout@v4
 
+    - name: Validate inputs
+      run: |
+        case "$NODE_VERSION" in
+          20|22|24) echo "Node.js version OK: $NODE_VERSION";;
+          *) echo "❌ Invalid Node.js version: $NODE_VERSION. Must be 20, 22, or 24."; exit 1;;
+        esac
+
+        case "$TARGET_ARCH" in
+          x86_64|aarch64) echo "Target arch OK: $TARGET_ARCH";;
+          *) echo "❌ Invalid target arch: $TARGET_ARCH. Must be x86_64 or aarch64."; exit 1;;
+        esac
+
     - name: Clone OpenWrt master
-      run: git clone --depth 1 https://github.com/openwrt/openwrt.git
+      run: |
+        git clone --depth 1 https://github.com/openwrt/openwrt.git
 
     - name: Add custom node feed & update feeds
       working-directory: ./openwrt
@@ -44,22 +59,36 @@ jobs:
           subversion git wget file python3-pip
         pip3 install --user meson ninja
 
-    - name: Configure OpenWrt for ${{ env.TARGET_ARCH }}
+    - name: Configure build for selected node version and arch
       working-directory: ./openwrt
       run: |
         rm -f .config
-        if [ "$TARGET_ARCH" = "x86_64" ]; then
-          echo "CONFIG_TARGET_x86=y" >> .config
-          echo "CONFIG_TARGET_x86_64=y" >> .config
-          echo "CONFIG_TARGET_x86_64_Generic=y" >> .config
-        elif [ "$TARGET_ARCH" = "aarch64" ]; then
-          echo "CONFIG_TARGET_aarch64=y" >> .config
-          echo "CONFIG_TARGET_aarch64_generic=y" >> .config
-          echo "CONFIG_TARGET_aarch64_generic_Generic=y" >> .config
-        fi
+        # 选择目标平台
+        case "$TARGET_ARCH" in
+          x86_64)
+            echo "CONFIG_TARGET_x86=y" >> .config
+            echo "CONFIG_TARGET_x86_64=y" >> .config
+            echo "CONFIG_TARGET_x86_64_Generic=y" >> .config
+            ;;
+          aarch64)
+            echo "CONFIG_TARGET_aarch64=y" >> .config
+            echo "CONFIG_TARGET_aarch64_generic=y" >> .config
+            ;;
+        esac
+
+        # 配置 Node.js 版本选项，默认关闭所有，开启选中的
+        echo "# CONFIG_NODEJS_20 is not set" >> .config
+        echo "# CONFIG_NODEJS_22 is not set" >> .config
+        echo "# CONFIG_NODEJS_24 is not set" >> .config
+
+        case "$NODE_VERSION" in
+          20) echo "CONFIG_NODEJS_20=y" >> .config ;;
+          22) echo "CONFIG_NODEJS_22=y" >> .config ;;
+          24) echo "CONFIG_NODEJS_24=y" >> .config ;;
+        esac
+
+        # 必选开启 Node 包
         echo "CONFIG_PACKAGE_node=y" >> .config
-        echo "CONFIG_NODEJS_${NODE_VERSION}=y" >> .config
-        echo "CONFIG_PACKAGE_apk-mbedtls=y" >> .config
         make defconfig
 
     - name: Build toolchain and dependencies
@@ -68,39 +97,46 @@ jobs:
         make tools/install -j$(nproc) V=s
         make toolchain/install -j$(nproc) V=s
 
-    - name: Compile Node.js and apk-mbedtls
+    - name: Compile Node.js package
       working-directory: ./openwrt
       run: |
         make package/feeds/node/node/compile -j$(nproc) V=s
-        make package/libs/apk-mbedtls/compile -j$(nproc) V=s
 
-    - name: Copy APK and Key Files
+    - name: Copy APK and Key Files (with mbedtls & keys check)
       run: |
-        mkdir -p output/apk
-        mkdir -p output/keys
-        cp openwrt/bin/packages/${{ env.TARGET_ARCH }}/node/node*.apk output/apk/
-        cp openwrt/bin/packages/${{ env.TARGET_ARCH }}/base/apk-mbedtls*.apk output/apk/
-        if [ -d "openwrt/staging_dir/target-${{ env.TARGET_ARCH }}_musl/root-${{ env.TARGET_ARCH }}/etc/apk/keys/" ]; then
-          cp -r openwrt/staging_dir/target-${{ env.TARGET_ARCH }}_musl/root-${{ env.TARGET_ARCH }}/etc/apk/keys/* output/keys/
+        mkdir -p output/apk output/keys
+        # 拷贝 apk 文件
+        cp openwrt/bin/packages/${TARGET_ARCH}/node/node*.apk output/apk/
+        # 确认 apk-mbedtls 依赖存在，或者略过
+        if grep -q "apk-mbedtls" openwrt/bin/packages/${TARGET_ARCH}/node/node*.apk; then
+          echo "apk-mbedtls dependency detected"
         else
-          echo "No APK keys found. Skipping key export."
+          echo "apk-mbedtls dependency NOT detected, beware"
         fi
+        # 复制 /etc/apk/keys，如果不存在则忽略
+        if [ -d openwrt/staging_dir/target-${TARGET_ARCH}_musl/root-${TARGET_ARCH}/etc/apk/keys ]; then
+          cp -r openwrt/staging_dir/target-${TARGET_ARCH}_musl/root-${TARGET_ARCH}/etc/apk/keys/* output/keys/
+        else
+          echo "No apk keys found, skipping key export"
+        fi
+
         cd output
-        tar -czvf node-apk-${{ env.TARGET_ARCH }}.tar.gz apk
-        tar -czvf node-apk-keys-${{ env.TARGET_ARCH }}.tar.gz keys
+        tar -czvf node-apk-${TARGET_ARCH}.tar.gz apk
+        tar -czvf node-apk-keys.tar.gz keys || echo "No keys archive created"
 
     - name: Install GitHub CLI
       run: sudo apt install -y gh
 
     - name: Authenticate GitHub CLI
-      run: echo "${{ secrets.GH_PAT }}" | gh auth login --with-token
+      env:
+        GH_TOKEN: ${{ secrets.GH_PAT }}
+      run: echo "$GH_TOKEN" | gh auth login --with-token
 
     - name: Create GitHub Release (if not exists)
       run: |
-        gh release view $RELEASE_TAG || \
-        gh release create $RELEASE_TAG -t "$RELEASE_TAG" -n "Node.js $NODE_VERSION APK for OpenWrt $TARGET_ARCH"
+        gh release view $RELEASE_TAG || gh release create $RELEASE_TAG -t "$RELEASE_TAG" -n "Node.js ${NODE_VERSION} APK for OpenWrt ${TARGET_ARCH}"
 
     - name: Upload APK and Keys to Release
       run: |
-        gh release upload $RELEASE_TAG output/node-apk-${{ env.TARGET_ARCH }}.tar.gz --clobber
-        gh release upload $RELEASE_TAG output/node-apk-keys-${{ env.TARGET_ARCH }}.tar.gz --clobber
+        gh release upload $RELEASE_TAG output/node-apk-${TARGET_ARCH}.tar.gz --clobber
+        gh release upload $RELEASE_TAG output/node-apk-keys.tar.gz --clobber || echo "No keys upload"
