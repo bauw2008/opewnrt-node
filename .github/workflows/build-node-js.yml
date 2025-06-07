@@ -1,21 +1,31 @@
-name: Build Node.js APK and Upload to Release
+name: Build Node.js APKs and Upload to Release
 
 on:
   workflow_dispatch:
+    inputs:
+      node_version:
+        description: "Node.js version"
+        required: true
+        default: "20"
+      target_arch:
+        description: "Target architecture"
+        required: true
+        default: "x86_64"
 
 jobs:
   build:
     runs-on: ubuntu-latest
     env:
-      RELEASE_TAG: node-v20-x86_64
+      NODE_VERSION: ${{ github.event.inputs.node_version }}
+      TARGET_ARCH: ${{ github.event.inputs.target_arch }}
+      RELEASE_TAG: node-v${{ github.event.inputs.node_version }}-${{ github.event.inputs.target_arch }}
 
     steps:
     - name: Checkout workflow repo
       uses: actions/checkout@v4
 
     - name: Clone OpenWrt master
-      run: |
-        git clone --depth 1 https://github.com/openwrt/openwrt.git
+      run: git clone --depth 1 https://github.com/openwrt/openwrt.git
 
     - name: Add custom node feed & update feeds
       working-directory: ./openwrt
@@ -34,18 +44,22 @@ jobs:
           subversion git wget file python3-pip
         pip3 install --user meson ninja
 
-    - name: Configure x86_64 build
+    - name: Configure OpenWrt for ${{ env.TARGET_ARCH }}
       working-directory: ./openwrt
       run: |
         rm -f .config
-        echo "CONFIG_TARGET_x86=y" >> .config
-        echo "CONFIG_TARGET_x86_64=y" >> .config
-        echo "CONFIG_TARGET_x86_64_Generic=y" >> .config
+        if [ "$TARGET_ARCH" = "x86_64" ]; then
+          echo "CONFIG_TARGET_x86=y" >> .config
+          echo "CONFIG_TARGET_x86_64=y" >> .config
+          echo "CONFIG_TARGET_x86_64_Generic=y" >> .config
+        elif [ "$TARGET_ARCH" = "aarch64" ]; then
+          echo "CONFIG_TARGET_aarch64=y" >> .config
+          echo "CONFIG_TARGET_aarch64_generic=y" >> .config
+          echo "CONFIG_TARGET_aarch64_generic_Generic=y" >> .config
+        fi
         echo "CONFIG_PACKAGE_node=y" >> .config
-        echo "CONFIG_NODEJS_20=y" >> .config
+        echo "CONFIG_NODEJS_${NODE_VERSION}=y" >> .config
         echo "CONFIG_PACKAGE_apk-mbedtls=y" >> .config
-        echo "# CONFIG_NODEJS_22 is not set" >> .config
-        echo "# CONFIG_NODEJS_24 is not set" >> .config
         make defconfig
 
     - name: Build toolchain and dependencies
@@ -54,41 +68,39 @@ jobs:
         make tools/install -j$(nproc) V=s
         make toolchain/install -j$(nproc) V=s
 
-    - name: Compile Node.js for x86_64
+    - name: Compile Node.js and apk-mbedtls
       working-directory: ./openwrt
       run: |
         make package/feeds/node/node/compile -j$(nproc) V=s
+        make package/libs/apk-mbedtls/compile -j$(nproc) V=s
 
     - name: Copy APK and Key Files
       run: |
         mkdir -p output/apk
         mkdir -p output/keys
-        cp openwrt/bin/packages/x86_64/node/node*.apk output/apk/
-
-        KEYDIR="openwrt/staging_dir/target-x86_64_musl/root-x86_64/etc/apk/keys"
-        if [ -d "$KEYDIR" ] && [ "$(ls -A $KEYDIR)" ]; then
-          cp -r $KEYDIR/* output/keys/
+        cp openwrt/bin/packages/${{ env.TARGET_ARCH }}/node/node*.apk output/apk/
+        cp openwrt/bin/packages/${{ env.TARGET_ARCH }}/base/apk-mbedtls*.apk output/apk/
+        if [ -d "openwrt/staging_dir/target-${{ env.TARGET_ARCH }}_musl/root-${{ env.TARGET_ARCH }}/etc/apk/keys/" ]; then
+          cp -r openwrt/staging_dir/target-${{ env.TARGET_ARCH }}_musl/root-${{ env.TARGET_ARCH }}/etc/apk/keys/* output/keys/
         else
-          echo "No keys found, skipping keys export."
+          echo "No APK keys found. Skipping key export."
         fi
-
         cd output
-        tar -czvf node-apk-x86_64.tar.gz apk
-        tar -czvf node-apk-keys.tar.gz keys
+        tar -czvf node-apk-${{ env.TARGET_ARCH }}.tar.gz apk
+        tar -czvf node-apk-keys-${{ env.TARGET_ARCH }}.tar.gz keys
 
     - name: Install GitHub CLI
-      run: |
-        sudo apt install -y gh
+      run: sudo apt install -y gh
 
     - name: Authenticate GitHub CLI
-      run: |
-        echo "${{ secrets.GH_PAT }}" | gh auth login --with-token
+      run: echo "${{ secrets.GH_PAT }}" | gh auth login --with-token
 
     - name: Create GitHub Release (if not exists)
       run: |
-        gh release view $RELEASE_TAG || gh release create $RELEASE_TAG -t "$RELEASE_TAG" -n "Node.js 20 APK for OpenWrt x86_64"
+        gh release view $RELEASE_TAG || \
+        gh release create $RELEASE_TAG -t "$RELEASE_TAG" -n "Node.js $NODE_VERSION APK for OpenWrt $TARGET_ARCH"
 
     - name: Upload APK and Keys to Release
       run: |
-        gh release upload $RELEASE_TAG output/node-apk-x86_64.tar.gz --clobber
-        gh release upload $RELEASE_TAG output/node-apk-keys.tar.gz --clobber
+        gh release upload $RELEASE_TAG output/node-apk-${{ env.TARGET_ARCH }}.tar.gz --clobber
+        gh release upload $RELEASE_TAG output/node-apk-keys-${{ env.TARGET_ARCH }}.tar.gz --clobber
