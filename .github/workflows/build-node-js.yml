@@ -1,4 +1,4 @@
-name: Build Node.js APK and Upload to Release
+name: Build and Release Node.js for OpenWrt
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
       node_version:
         description: "Node.js version (choose: 20, 22, 24)"
         required: true
-        default: "22"
+        default: "20"
       target_arch:
         description: "Target architecture (choose: x86_64, aarch64)"
         required: true
@@ -61,6 +61,7 @@ jobs:
       working-directory: ./openwrt
       run: |
         rm -f .config
+
         case "$TARGET_ARCH" in
           x86_64)
             echo "CONFIG_TARGET_x86=y" >> .config
