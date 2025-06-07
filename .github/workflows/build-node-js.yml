@@ -54,35 +54,54 @@ jobs:
         sudo apt update
         sudo apt install -y build-essential clang flex bison g++ gawk gcc-multilib gperf unzip \
           libncurses5-dev zlib1g-dev libssl-dev python3 python3-apt python3-distutils-extra rsync \
-          subversion git wget file python3-pip
+          subversion git wget file python3-pip coreutils
         pip3 install --user meson ninja
 
-    - name: Fix Makefile issues and unset ARCH env var
+    - name: Fix environment and Makefile
       working-directory: ./openwrt
       run: |
-        # 修复 scripts/config/Makefile 中 CFLAGS 不当的问题
-        sed -i 's/CFLAGS= -O2 $(call cc-option,-fno-PIE) $(call cc-option,-fno-stack-protector)/CFLAGS= -O2/' scripts/config/Makefile
-
-        # 关键：unset ARCH 避免 scripts/config 编译时传入错误的 ARCH 参数
+        # 关键修复：彻底清除ARCH环境变量
         unset ARCH
-
-    - name: Configure build for selected node version and arch (single-threaded defconfig)
-      working-directory: ./openwrt
-      run: |
-        rm -f .config
-
+        unset CROSS_COMPILE
+        unset CROSS_COMPILE_ARM
+        
+        # 修复Makefile
+        sed -i 's/CFLAGS= -O2 $(call cc-option,-fno-PIE) $(call cc-option,-fno-stack-protector)/CFLAGS= -O2/' scripts/config/Makefile
+        
+        # 设置正确的目标架构选项
         case "$TARGET_ARCH" in
           x86_64)
-            echo "CONFIG_TARGET_x86=y" >> .config
-            echo "CONFIG_TARGET_x86_64=y" >> .config
-            echo "CONFIG_TARGET_x86_64_Generic=y" >> .config
+            export TARGET_OPTIONS="x86_64"
             ;;
           aarch64)
-            echo "CONFIG_TARGET_aarch64=y" >> .config
-            echo "CONFIG_TARGET_aarch64_generic=y" >> .config
+            export TARGET_OPTIONS="aarch64"
             ;;
         esac
 
+    - name: Configure build
+      working-directory: ./openwrt
+      run: |
+        rm -f .config
+        
+        # 使用正确的目标配置
+        case "$TARGET_ARCH" in
+          x86_64)
+            cat <<EOF >> .config
+CONFIG_TARGET_x86=y
+CONFIG_TARGET_x86_64=y
+CONFIG_TARGET_x86_64_DEVICE_generic=y
+EOF
+            ;;
+          aarch64)
+            cat <<EOF >> .config
+CONFIG_TARGET_armvirt=y
+CONFIG_TARGET_armvirt_64=y
+CONFIG_TARGET_armvirt_64_Default=y
+EOF
+            ;;
+        esac
+
+        # 禁用所有Node版本然后启用选定的版本
         echo "# CONFIG_NODEJS_20 is not set" >> .config
         echo "# CONFIG_NODEJS_22 is not set" >> .config
         echo "# CONFIG_NODEJS_24 is not set" >> .config
@@ -93,49 +112,78 @@ jobs:
           24) echo "CONFIG_NODEJS_24=y" >> .config ;;
         esac
 
-        # 保留 apk-mbedtls 依赖，保证包签名和验证通过
         echo "CONFIG_PACKAGE_node=y" >> .config
         echo "CONFIG_PACKAGE_apk-mbedtls=y" >> .config
+        
+        # 应用配置
+        make defconfig
 
-    - name: Build toolchain and dependencies (multi-threaded)
+    - name: Build toolchain
       working-directory: ./openwrt
       run: |
-        # 构建 tools，使用 -j$(nproc)，保证性能同时避免并发问题
-        make tools/install -j$(nproc) V=s
-        make toolchain/install -j$(nproc) V=s
+        # 单线程构建工具链避免问题
+        make tools/install -j1 V=s
+        make toolchain/install -j1 V=s
 
-    - name: Compile Node.js package (multi-threaded)
+    - name: Compile Node.js
       working-directory: ./openwrt
-      run: make package/feeds/node/node/compile -j$(nproc) V=s
+      run: |
+        # 关键修复：在构建Node前设置ARCH变量
+        case "$TARGET_ARCH" in
+          x86_64)
+            export ARCH=x86_64
+            ;;
+          aarch64)
+            export ARCH=aarch64
+            ;;
+        esac
+        
+        # 单线程构建Node.js避免并发问题
+        make package/feeds/node/node/compile -j1 V=s
 
-    - name: Copy APK and Key Files
+    - name: Package artifacts
       run: |
         mkdir -p output/apk output/keys
-        cp openwrt/bin/packages/${TARGET_ARCH}/node/node*.apk output/apk/
-
-        if [ -d openwrt/staging_dir/target-${TARGET_ARCH}_musl/root-${TARGET_ARCH}/etc/apk/keys ]; then
-          cp -r openwrt/staging_dir/target-${TARGET_ARCH}_musl/root-${TARGET_ARCH}/etc/apk/keys/* output/keys/
-        else
-          echo "No apk keys found, skipping key export"
-        fi
+        
+        # 查找APK文件
+        find openwrt/bin -name "node*.apk" -exec cp {} output/apk/ \;
+        
+        # 查找密钥 - 根据OpenWrt版本可能有不同位置
+        KEY_DIRS=(
+          "openwrt/staging_dir/target-*/etc/apk/keys"
+          "openwrt/staging_dir/target-*/root-*/etc/apk/keys"
+        )
+        
+        for dir in "${KEY_DIRS[@]}"; do
+          if [ -d "$dir" ]; then
+            cp -r "$dir"/* output/keys/
+            break
+          fi
+        done
 
         cd output
         tar -czvf node-apk-${TARGET_ARCH}.tar.gz apk
-        tar -czvf node-apk-keys.tar.gz keys || echo "No keys archive created"
+        [ -d keys ] && tar -czvf node-apk-keys.tar.gz keys || echo "No keys found"
 
-    - name: Install GitHub CLI
+    - name: Setup GitHub CLI
       run: sudo apt install -y gh
 
-    - name: Authenticate GitHub CLI
+    - name: Authenticate GH CLI
       env:
         GH_TOKEN: ${{ secrets.GH_PAT }}
       run: echo "$GH_TOKEN" | gh auth login --with-token
 
-    - name: Create GitHub Release (if not exists)
+    - name: Create Release
       run: |
-        gh release view $RELEASE_TAG || gh release create $RELEASE_TAG -t "$RELEASE_TAG" -n "Node.js ${NODE_VERSION} APK for OpenWrt ${TARGET_ARCH}"
+        if ! gh release view "$RELEASE_TAG"; then
+          gh release create "$RELEASE_TAG" \
+            --title "Node.js $NODE_VERSION for $TARGET_ARCH" \
+            --notes "Built on $(date +%Y-%m-%d)"
+        fi
 
-    - name: Upload APK and Keys to Release
+    - name: Upload Assets
       run: |
-        gh release upload $RELEASE_TAG output/node-apk-${TARGET_ARCH}.tar.gz --clobber
-        gh release upload $RELEASE_TAG output/node-apk-keys.tar.gz --clobber || echo "No keys upload"
+        gh release upload "$RELEASE_TAG" \
+          output/node-apk-${TARGET_ARCH}.tar.gz \
+          $( [ -f output/node-apk-keys.tar.gz ] && echo "output/node-apk-keys.tar.gz" ) \
+          --clobber
