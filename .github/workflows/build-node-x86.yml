@@ -56,14 +56,30 @@ jobs:
       run: |
         make package/feeds/node/node/compile V=s -j$(nproc)
 
-    - name: List compiled APKs
-      working-directory: ./openwrt
+    - name: Find built APK
+      id: find_apk
       run: |
-        echo "Searching for built .apk files:"
-        find bin/packages/ -name "node*.apk" || echo "No APKs found"
+        APK_PATH=$(find ./openwrt/bin/packages/ -name "node*.apk" | head -n 1)
+        if [ -z "$APK_PATH" ]; then
+          echo "No APK found!"
+          exit 1
+        fi
+        echo "apk_path=$APK_PATH" >> $GITHUB_OUTPUT
+        echo "Found APK: $APK_PATH"
 
-    - name: Upload Node.js APK
-      uses: actions/upload-artifact@v4
+    - name: Create GitHub Release
+      id: create_release
+      uses: actions/create-release@v1
       with:
-        name: node-apk-x86_64
-        path: openwrt/bin/packages/*/node/*.apk
+        tag_name: "nodejs-x86_64-${{ github.run_id }}"
+        release_name: "Node.js x86_64 Build #${{ github.run_id }}"
+        draft: false
+        prerelease: false
+
+    - name: Upload Node.js APK to Release Assets
+      uses: actions/upload-release-asset@v1
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: ${{ steps.find_apk.outputs.apk_path }}
+        asset_name: node115-20.19.2-r1.apk
+        asset_content_type: application/octet-stream
