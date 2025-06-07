@@ -57,12 +57,16 @@ jobs:
           subversion git wget file python3-pip
         pip3 install --user meson ninja
 
-    - name: Fix scripts/config/Makefile CFLAGS to avoid -fno-PIE issues
+    - name: Fix Makefile issues and unset ARCH env var
       working-directory: ./openwrt
       run: |
+        # 修复 scripts/config/Makefile 中 CFLAGS 不当的问题
         sed -i 's/CFLAGS= -O2 $(call cc-option,-fno-PIE) $(call cc-option,-fno-stack-protector)/CFLAGS= -O2/' scripts/config/Makefile
 
-    - name: Create OpenWrt .config with selected node version & arch
+        # 关键：unset ARCH 避免 scripts/config 编译时传入错误的 ARCH 参数
+        unset ARCH
+
+    - name: Configure build for selected node version and arch (single-threaded defconfig)
       working-directory: ./openwrt
       run: |
         rm -f .config
@@ -89,22 +93,15 @@ jobs:
           24) echo "CONFIG_NODEJS_24=y" >> .config ;;
         esac
 
+        # 保留 apk-mbedtls 依赖，保证包签名和验证通过
         echo "CONFIG_PACKAGE_node=y" >> .config
         echo "CONFIG_PACKAGE_apk-mbedtls=y" >> .config
 
-    - name: Clean any existing build artifacts
-      working-directory: ./openwrt
-      run: make distclean
-
-    - name: Build host tools (scripts/config/conf) in single-thread mode
+    - name: Build toolchain and dependencies (multi-threaded)
       working-directory: ./openwrt
       run: |
-        make tools/configure -j1 V=s
-        make tools/install -j1 V=s
-
-    - name: Build toolchain (multi-threaded)
-      working-directory: ./openwrt
-      run: |
+        # 构建 tools，使用 -j$(nproc)，保证性能同时避免并发问题
+        make tools/install -j$(nproc) V=s
         make toolchain/install -j$(nproc) V=s
 
     - name: Compile Node.js package (multi-threaded)
