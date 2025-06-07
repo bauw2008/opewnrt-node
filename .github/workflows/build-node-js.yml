@@ -1,0 +1,86 @@
+name: Build Node.js APK and Upload to Release
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: node-v20-x86_64
+
+    steps:
+    - name: Checkout workflow repo
+      uses: actions/checkout@v4
+
+    - name: Clone OpenWrt master
+      run: |
+        git clone --depth 1 https://github.com/openwrt/openwrt.git
+
+    - name: Add custom node feed & update feeds
+      working-directory: ./openwrt
+      run: |
+        echo "src-git node https://github.com/nxhack/openwrt-node-packages.git" >> feeds.conf.default
+        ./scripts/feeds update -a
+        rm -rf feeds/packages/lang/node*
+        rm -rf package/feeds/packages/node*
+        ./scripts/feeds install -a -p node
+
+    - name: Install build dependencies
+      run: |
+        sudo apt update
+        sudo apt install -y build-essential clang flex bison g++ gawk gcc-multilib gperf unzip \
+          libncurses5-dev zlib1g-dev libssl-dev python3 python3-apt python3-distutils-extra rsync \
+          subversion git wget file python3-pip
+        pip3 install --user meson ninja
+
+    - name: Configure x86_64 build
+      working-directory: ./openwrt
+      run: |
+        rm -f .config
+        echo "CONFIG_TARGET_x86=y" >> .config
+        echo "CONFIG_TARGET_x86_64=y" >> .config
+        echo "CONFIG_TARGET_x86_64_Generic=y" >> .config
+        echo "CONFIG_PACKAGE_node=y" >> .config
+        echo "CONFIG_NODEJS_20=y" >> .config
+        echo "# CONFIG_NODEJS_22 is not set" >> .config
+        echo "# CONFIG_NODEJS_24 is not set" >> .config
+        make defconfig
+
+    - name: Build toolchain and dependencies
+      working-directory: ./openwrt
+      run: |
+        make tools/install -j$(nproc) V=s
+        make toolchain/install -j$(nproc) V=s
+
+    - name: Compile Node.js for x86_64
+      working-directory: ./openwrt
+      run: |
+        make package/feeds/node/node/compile -j$(nproc) V=s
+
+    - name: Copy APK and Key Files
+      run: |
+        mkdir -p output/apk
+        mkdir -p output/keys
+        cp openwrt/bin/packages/x86_64/node/node*.apk output/apk/
+        cp -r openwrt/staging_dir/target-x86_64_musl/root-x86_64/etc/apk/keys/* output/keys/ || echo "No keys found"
+        cd output
+        tar -czvf node-apk-x86_64.tar.gz apk
+        tar -czvf node-apk-keys.tar.gz keys
+
+    - name: Install GitHub CLI
+      run: |
+        sudo apt install -y gh
+
+    - name: Authenticate GitHub CLI
+      run: |
+        echo "${{ secrets.GITHUB_TOKEN }}" | gh auth login --with-token
+
+    - name: Create GitHub Release (if not exists)
+      run: |
+        gh release view $RELEASE_TAG || gh release create $RELEASE_TAG -t "$RELEASE_TAG" -n "Node.js 20 APK for OpenWrt x86_64"
+
+    - name: Upload APK and Keys to Release
+      run: |
+        gh release upload $RELEASE_TAG output/node-apk-x86_64.tar.gz --clobber
+        gh release upload $RELEASE_TAG output/node-apk-keys.tar.gz --clobber
