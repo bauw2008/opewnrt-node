@@ -27,46 +27,61 @@ jobs:
     - name: Validate inputs
       run: |
         case "$NODE_VERSION" in
-          20|22|24) echo "✅ Node.js version OK: $NODE_VERSION";;
+          20|22|24) echo "Node.js version OK: $NODE_VERSION";;
           *) echo "❌ Invalid Node.js version: $NODE_VERSION. Must be 20, 22, or 24."; exit 1;;
         esac
 
         case "$TARGET_ARCH" in
-          x86_64|aarch64) echo "✅ Target arch OK: $TARGET_ARCH";;
+          x86_64|aarch64) echo "Target arch OK: $TARGET_ARCH";;
           *) echo "❌ Invalid target arch: $TARGET_ARCH. Must be x86_64 or aarch64."; exit 1;;
         esac
 
     - name: Clone OpenWrt master
-      run: git clone --depth 1 https://github.com/openwrt/openwrt.git
-
-    - name: Setup ccache
       run: |
-        sudo apt update
-        sudo apt install -y ccache
-        export PATH="/usr/lib/ccache:$PATH"
-        echo "export PATH=/usr/lib/ccache:\$PATH" >> $GITHUB_ENV
+        git clone --depth 1 https://github.com/openwrt/openwrt.git
+
+    - name: Add custom node feed & update feeds
+      working-directory: ./openwrt
+      run: |
+        echo "src-git node https://github.com/nxhack/openwrt-node-packages.git" >> feeds.conf.default
+        ./scripts/feeds update -a
+        rm -rf feeds/packages/lang/node*
+        rm -rf package/feeds/packages/node*
+        ./scripts/feeds install -a -p node
 
     - name: Install build dependencies
       run: |
+        sudo apt update
         sudo apt install -y build-essential clang flex bison g++ gawk gcc-multilib gperf unzip \
           libncurses5-dev zlib1g-dev libssl-dev python3 python3-apt python3-distutils-extra rsync \
           subversion git wget file python3-pip
         pip3 install --user meson ninja
 
-    - name: Setup feeds and create .config
+    - name: Fix scripts/config/Makefile CFLAGS to avoid -fno-PIE issues
       working-directory: ./openwrt
       run: |
-        echo "src-git node https://github.com/nxhack/openwrt-node-packages.git" >> feeds.conf.default
-        ./scripts/feeds update -a
-        ./scripts/feeds install -a -p node
+        sed -i 's/CFLAGS= -O2 $(call cc-option,-fno-PIE) $(call cc-option,-fno-stack-protector)/CFLAGS= -O2/' scripts/config/Makefile
 
-        # 创建 minimal .config
-        cat <<EOF > .config
-        CONFIG_TARGET_${TARGET_ARCH}=y
-        CONFIG_TARGET_${TARGET_ARCH}_Generic=y
-        CONFIG_PACKAGE_node=y
-        CONFIG_PACKAGE_apk-mbedtls=y
-        EOF
+    - name: Create OpenWrt .config with selected node version & arch
+      working-directory: ./openwrt
+      run: |
+        rm -f .config
+
+        case "$TARGET_ARCH" in
+          x86_64)
+            echo "CONFIG_TARGET_x86=y" >> .config
+            echo "CONFIG_TARGET_x86_64=y" >> .config
+            echo "CONFIG_TARGET_x86_64_Generic=y" >> .config
+            ;;
+          aarch64)
+            echo "CONFIG_TARGET_aarch64=y" >> .config
+            echo "CONFIG_TARGET_aarch64_generic=y" >> .config
+            ;;
+        esac
+
+        echo "# CONFIG_NODEJS_20 is not set" >> .config
+        echo "# CONFIG_NODEJS_22 is not set" >> .config
+        echo "# CONFIG_NODEJS_24 is not set" >> .config
 
         case "$NODE_VERSION" in
           20) echo "CONFIG_NODEJS_20=y" >> .config ;;
@@ -74,29 +89,40 @@ jobs:
           24) echo "CONFIG_NODEJS_24=y" >> .config ;;
         esac
 
-    - name: Build toolchain and dependencies
+        echo "CONFIG_PACKAGE_node=y" >> .config
+        echo "CONFIG_PACKAGE_apk-mbedtls=y" >> .config
+
+    - name: Clean any existing build artifacts
+      working-directory: ./openwrt
+      run: make distclean
+
+    - name: Build host tools (scripts/config/conf) in single-thread mode
       working-directory: ./openwrt
       run: |
-        make defconfig
-        make tools/install -j$(nproc) V=s
+        make tools/configure -j1 V=s
+        make tools/install -j1 V=s
+
+    - name: Build toolchain (multi-threaded)
+      working-directory: ./openwrt
+      run: |
         make toolchain/install -j$(nproc) V=s
 
-    - name: Compile Node.js package
+    - name: Compile Node.js package (multi-threaded)
       working-directory: ./openwrt
-      run: |
-        make package/feeds/node/node/compile -j$(nproc) V=s
+      run: make package/feeds/node/node/compile -j$(nproc) V=s
 
-    - name: Archive APK and keys
-      working-directory: ./openwrt
+    - name: Copy APK and Key Files
       run: |
-        mkdir -p ../../output/apk ../../output/keys
-        cp bin/packages/${TARGET_ARCH}/node/node*.apk ../../output/apk/ || echo "No APKs found"
-        if [ -d staging_dir/target-${TARGET_ARCH}_musl/root-${TARGET_ARCH}/etc/apk/keys ]; then
-          cp -r staging_dir/target-${TARGET_ARCH}_musl/root-${TARGET_ARCH}/etc/apk/keys/* ../../output/keys/
+        mkdir -p output/apk output/keys
+        cp openwrt/bin/packages/${TARGET_ARCH}/node/node*.apk output/apk/
+
+        if [ -d openwrt/staging_dir/target-${TARGET_ARCH}_musl/root-${TARGET_ARCH}/etc/apk/keys ]; then
+          cp -r openwrt/staging_dir/target-${TARGET_ARCH}_musl/root-${TARGET_ARCH}/etc/apk/keys/* output/keys/
         else
-          echo "No apk keys found, skipping"
+          echo "No apk keys found, skipping key export"
         fi
-        cd ../../output
+
+        cd output
         tar -czvf node-apk-${TARGET_ARCH}.tar.gz apk
         tar -czvf node-apk-keys.tar.gz keys || echo "No keys archive created"
 
@@ -112,7 +138,7 @@ jobs:
       run: |
         gh release view $RELEASE_TAG || gh release create $RELEASE_TAG -t "$RELEASE_TAG" -n "Node.js ${NODE_VERSION} APK for OpenWrt ${TARGET_ARCH}"
 
-    - name: Upload APK and keys to Release
+    - name: Upload APK and Keys to Release
       run: |
         gh release upload $RELEASE_TAG output/node-apk-${TARGET_ARCH}.tar.gz --clobber
         gh release upload $RELEASE_TAG output/node-apk-keys.tar.gz --clobber || echo "No keys upload"
