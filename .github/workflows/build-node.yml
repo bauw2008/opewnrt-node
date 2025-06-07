@@ -56,10 +56,11 @@ jobs:
       run: |
         make package/feeds/node/node/compile V=s -j$(nproc)
 
-    - name: Find built APK
+    - name: Find built APK path
       id: find_apk
+      working-directory: ./openwrt
       run: |
-        APK_PATH=$(find ./openwrt/bin/packages/ -name "node*.apk" | head -n 1)
+        APK_PATH=$(find ./bin/packages/ -name "node*.apk" | head -n 1)
         if [ -z "$APK_PATH" ]; then
           echo "No APK found!"
           exit 1
@@ -67,12 +68,23 @@ jobs:
         echo "apk_path=$APK_PATH" >> $GITHUB_OUTPUT
         echo "Found APK: $APK_PATH"
 
+    - name: Rename APK with architecture prefix
+      id: rename_apk
+      run: |
+        original="${{ steps.find_apk.outputs.apk_path }}"
+        base=$(basename "$original")
+        arch="x86"
+        newname=$(echo "$base" | sed "s/^node/node-${arch}/")
+        cp "$original" "./$newname"
+        echo "renamed_path=./$newname" >> $GITHUB_OUTPUT
+        echo "renamed_filename=$newname" >> $GITHUB_OUTPUT
+
     - name: Create GitHub Release
       id: create_release
       uses: actions/create-release@v1
       with:
-        tag_name: "nodejs-x86_64-${{ github.run_id }}"
-        release_name: "Node.js x86_64 Build #${{ github.run_id }}"
+        tag_name: "nodejs-${{ github.run_id }}"
+        release_name: "Node.js Build #${{ github.run_id }}"
         draft: false
         prerelease: false
 
@@ -80,6 +92,6 @@ jobs:
       uses: actions/upload-release-asset@v1
       with:
         upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ${{ steps.find_apk.outputs.apk_path }}
-        asset_name: node115-20.19.2-r1.apk
+        asset_path: ${{ steps.rename_apk.outputs.renamed_path }}
+        asset_name: ${{ steps.rename_apk.outputs.renamed_filename }}
         asset_content_type: application/octet-stream
